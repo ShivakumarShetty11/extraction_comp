@@ -5,6 +5,26 @@ __pycache__/
 *.pyo
 *.pyd
 *.egg-info/
+*.dist-info/
+
+# Python packages accidentally installed directly inside backend/
+backend/annotated_types/
+backend/anthropic/
+backend/anyio/
+backend/bin/
+backend/certifi/
+backend/distro/
+backend/docstring_parser/
+backend/h11/
+backend/httpcore/
+backend/httpx/
+backend/idna/
+backend/jiter/
+backend/pydantic/
+backend/pydantic_core/
+backend/sniffio/
+backend/typing_extensions.py
+backend/typing_inspection/
 
 # Environment — never commit secrets
 backend/.env
