@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Environment — never commit secrets
+backend/.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Build output (generated during Render build step)
+backend/static/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Large sample data files (optional — remove lines below to include them)
+*.xlsx
+*.xls
