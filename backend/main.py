@@ -89,6 +89,18 @@ async def table_metadata(request: Request):
     return {"categories": categories}
 
 
+@app.post("/api/group-tables")
+async def group_tables(request: Request):
+    """Cluster extracted tables by semantic similarity using Claude."""
+    data = await request.json()
+    tables_meta = data.get("tables", [])
+    try:
+        groups = _direct.group_tables_by_similarity(tables_meta)
+    except Exception as e:
+        raise HTTPException(500, f"Grouping error: {e}")
+    return {"groups": groups}
+
+
 # --- Serve React frontend (production) ---
 _static_dir = pathlib.Path(__file__).parent / "static"
 _assets_dir = _static_dir / "assets"

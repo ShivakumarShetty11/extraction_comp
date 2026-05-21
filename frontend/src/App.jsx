@@ -27,7 +27,9 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [filename, setFilename] = useState('')
-  const [resultMode, setResultMode] = useState(null) // mode of the last run
+  const [resultMode, setResultMode] = useState(null)
+  const [groups, setGroups] = useState(null)
+  const [grouping, setGrouping] = useState(false)
 
   const handleUpload = async (file) => {
     setLoading(true)
@@ -35,6 +37,7 @@ export default function App() {
     setTables([])
     setSelectedId(null)
     setResultMode(null)
+    setGroups(null)
 
     const formData = new FormData()
     formData.append('file', file)
@@ -57,6 +60,25 @@ export default function App() {
     }
   }
 
+  const handleGroup = async () => {
+    setGrouping(true)
+    try {
+      const meta = tables.map(({ id, title, sheet, description }) => ({ id, title, sheet, description }))
+      const res = await fetch('/api/group-tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tables: meta }),
+      })
+      if (!res.ok) throw new Error('Grouping failed')
+      const data = await res.json()
+      setGroups(data.groups)
+    } catch {
+      // grouping is best-effort; leave groups null so flat list stays visible
+    } finally {
+      setGrouping(false)
+    }
+  }
+
   const selectedTable = tables.find((t) => t.id === selectedId)
   const cfg = MODE_CONFIG[mode]
 
@@ -74,7 +96,7 @@ export default function App() {
             <button
               key={key}
               className={`mode-btn ${mode === key ? 'mode-btn-active' : ''}`}
-              onClick={() => { setMode(key); setTables([]); setSelectedId(null); setError(null) }}
+              onClick={() => { setMode(key); setTables([]); setSelectedId(null); setError(null); setGroups(null) }}
               disabled={loading}
               title={c.description}
             >
@@ -148,6 +170,9 @@ export default function App() {
               onSelect={setSelectedId}
               filename={filename}
               resultMode={resultMode}
+              groups={groups}
+              grouping={grouping}
+              onGroup={handleGroup}
             />
             <main className="table-main">
               {selectedTable ? (
