@@ -445,12 +445,10 @@ body {
 .group-btn-loading { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
 
 .sidebar-group-header {
-  padding: 6px 16px 4px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: .6px;
-  text-transform: uppercase;
-  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 4px 16px;
   background: #f9fafb;
   border-top: 1px solid #e5e7eb;
   border-bottom: 1px solid #f3f4f6;
@@ -458,6 +456,31 @@ body {
   top: 0;
   z-index: 1;
 }
+
+.sidebar-group-name {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.group-meta-btn {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #059669;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s;
+  flex-shrink: 0;
+}
+.group-meta-btn:hover:not(:disabled) { background: #d1fae5; }
+.group-meta-btn:disabled { opacity: .6; cursor: default; }
+.group-meta-btn-loading { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
 
 /* ── Viewer header extras ───────────────────────────────────────────────── */
 .viewer-title-row {
