@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import * as XLSX from 'xlsx'
 
-// ── helpers shared with group metadata build ────────────────────────────────
+// ── Metadata Excel helpers ──────────────────────────────────────────────────
 
 function safeSheetName(name, usedNames) {
   let safe = name.replace(/[/\\?*[\]:]/g, '_').slice(0, 31)
@@ -40,7 +40,6 @@ async function downloadGroupMetadata(group, tableMap, setGroupMeta) {
 
   setGroupMeta((prev) => ({ ...prev, [group.name]: true }))
   try {
-    // Fetch metadata for every table in the group (sequentially to avoid rate limits)
     const allCategories = []
     for (const table of tables) {
       const res = await fetch('/api/table-metadata', {
@@ -60,7 +59,6 @@ async function downloadGroupMetadata(group, tableMap, setGroupMeta) {
       allCategories.push(...(categories || []))
     }
 
-    // Deduplicate categories by name across all tables
     const seenCatNames = new Set()
     const mergedCategories = allCategories.filter((cat) => {
       const key = (cat.name ?? '').toLowerCase().trim()
@@ -72,10 +70,9 @@ async function downloadGroupMetadata(group, tableMap, setGroupMeta) {
     const wb = XLSX.utils.book_new()
     const usedSheetNames = new Set()
 
-    // ── Overview sheet: group summary + per-table column stats ───────────────
     const overviewMatrix = [
-      ['Group',      group.name],
-      ['Tables',     tables.length],
+      ['Group', group.name],
+      ['Tables', tables.length],
       ['Categories', mergedCategories.length],
       [],
     ]
@@ -109,7 +106,6 @@ async function downloadGroupMetadata(group, tableMap, setGroupMeta) {
     wsOv['!cols'] = [{ wch: 26 }, { wch: 42 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 16 }]
     XLSX.utils.book_append_sheet(wb, wsOv, safeSheetName('Overview', usedSheetNames))
 
-    // ── One sheet per merged category ────────────────────────────────────────
     for (const cat of mergedCategories) {
       if (!cat.values?.length) continue
       const seenVals = new Set()
@@ -159,9 +155,72 @@ function TableItem({ tbl, selectedId, onSelect }) {
   )
 }
 
+function LinkageSection({ linkages, linkageLoading, onDetectLinkages, onJoin, tableMap }) {
+  const [collapsed, setCollapsed] = useState(false)
+
+  return (
+    <div className="linkage-section">
+      <div className="linkage-section-header">
+        <button className="linkage-toggle" onClick={() => setCollapsed((v) => !v)}>
+          <span className="linkage-toggle-icon">{collapsed ? '▶' : '▼'}</span>
+          <span className="linkage-toggle-label">Linkages</span>
+          {linkages && <span className="linkage-count">{linkages.length}</span>}
+        </button>
+        <button
+          className={`detect-btn${linkageLoading ? ' detect-btn-loading' : ''}`}
+          onClick={onDetectLinkages}
+          disabled={linkageLoading}
+          title="Ask Claude to find shared categorical dimensions across all tables"
+        >
+          {linkageLoading ? '…' : linkages ? '↻' : 'Detect'}
+        </button>
+      </div>
+
+      {!collapsed && (
+        <div className="linkage-list">
+          {!linkages && !linkageLoading && (
+            <div className="linkage-hint">
+              Click Detect to find join dimensions shared across tables (e.g. Area Type, Gender).
+            </div>
+          )}
+          {linkages && linkages.length === 0 && (
+            <div className="linkage-hint">No shared dimensions found.</div>
+          )}
+          {linkages && linkages.map((lnk) => (
+            <div key={lnk.canonical} className="linkage-item">
+              <div className="linkage-item-top">
+                <span className="linkage-dim-name">{lnk.dimension}</span>
+                <button
+                  className="join-open-btn"
+                  onClick={() => onJoin(lnk)}
+                  title={`Join tables on ${lnk.dimension}`}
+                >
+                  Join
+                </button>
+              </div>
+              <div className="linkage-item-desc">{lnk.description}</div>
+              <div className="linkage-item-tables">
+                {lnk.table_links.map((tl) => (
+                  <span key={tl.table_id} className="linkage-table-chip" title={`col: ${tl.column}`}>
+                    {tableMap[tl.table_id]?.title?.slice(0, 22) || tl.table_id}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main export ─────────────────────────────────────────────────────────────
 
-export default function TableSidebar({ tables, selectedId, onSelect, filename, resultMode, groups, grouping, onGroup }) {
+export default function TableSidebar({
+  tables, selectedId, onSelect, filename, resultMode,
+  groups, grouping, onGroup,
+  linkages, linkageLoading, onDetectLinkages, onJoin,
+}) {
   const [groupMeta, setGroupMeta] = useState({})
   const tableMap = Object.fromEntries(tables.map((t) => [t.id, t]))
 
@@ -219,6 +278,14 @@ export default function TableSidebar({ tables, selectedId, onSelect, filename, r
           ))
         )}
       </div>
+
+      <LinkageSection
+        linkages={linkages}
+        linkageLoading={linkageLoading}
+        onDetectLinkages={onDetectLinkages}
+        onJoin={onJoin}
+        tableMap={tableMap}
+      />
     </aside>
   )
 }

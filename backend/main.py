@@ -89,6 +89,18 @@ async def table_metadata(request: Request):
     return {"categories": categories}
 
 
+@app.post("/api/detect-linkages")
+async def detect_linkages(request: Request):
+    """Detect shared categorical dimensions across tables that can be used as join keys."""
+    data = await request.json()
+    tables_meta = data.get("tables", [])
+    try:
+        linkages = _direct.detect_linkages(tables_meta)
+    except Exception as e:
+        raise HTTPException(500, f"Linkage detection error: {e}")
+    return {"linkages": linkages}
+
+
 @app.post("/api/group-tables")
 async def group_tables(request: Request):
     """Cluster extracted tables by semantic similarity using Claude."""

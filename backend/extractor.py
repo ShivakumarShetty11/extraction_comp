@@ -2,6 +2,7 @@ import io
 import json
 import re
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -301,6 +302,22 @@ class TableExtractor:
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             all_tables.extend(self._process_sheet(ws, sheet_name, filename))
+
+        # Give every table a guaranteed-unique ID.
+        for tbl in all_tables:
+            tbl["id"] = str(uuid.uuid4())
+
+        # Within each sheet, if multiple tables share the same title (ignoring
+        # whitespace differences like "TABLE: D-3" vs "TABLE : D-3"), keep the
+        # first one's title unchanged and suffix later ones with (2), (3)…
+        seen: Dict[Tuple[str, str], int] = {}  # (sheet, normalised_title) -> count seen so far
+        for tbl in all_tables:
+            norm_key = (tbl["sheet"], re.sub(r'\s+', '', tbl.get("title", "")).lower())
+            count = seen.get(norm_key, 0) + 1
+            seen[norm_key] = count
+            if count > 1:
+                tbl["title"] = f"{tbl['title']} ({count})"
+
         return all_tables
 
     # ── Sheet processing ──────────────────────────────────────────────────────
@@ -309,8 +326,11 @@ class TableExtractor:
         grid = self._filled_grid(ws)
         if not grid:
             return []
-        results = []
+
         blocks = self._find_blocks(grid)
+        print(f"[DEBUG] sheet={sheet_name!r}  grid_rows={len(grid)}  blocks={blocks}")
+
+        results = []
         for idx, (start, end) in enumerate(blocks):
             try:
                 tbl = self._extract_table(grid, start, end, sheet_name, filename, idx)
@@ -318,8 +338,6 @@ class TableExtractor:
                     results.append(tbl)
             except Exception as e:
                 print(f"[{sheet_name}] block {start}-{end} error: {e}")
-            # Pause between tables so back-to-back LLM calls don't hit per-minute limits.
-            # Skip the pause after the last table in this sheet.
             if idx < len(blocks) - 1:
                 time.sleep(3)
         return results
@@ -359,21 +377,43 @@ class TableExtractor:
     @staticmethod
     def _has_table_marker(row: List[Any]) -> bool:
         text = " ".join(str(v) for v in row if v is not None)
-        return bool(re.search(r"\bTABLE\s*[:\-]?\s*[A-Z\d]", text, re.IGNORECASE))
+        return bool(re.search(r"\bTABLE[\s:\-]", text, re.IGNORECASE))
+
+    def _count_preceding_blanks(self, grid: List[List[Any]], row_idx: int) -> int:
+        count = 0
+        for j in range(row_idx - 1, -1, -1):
+            if self._blank(grid[j]):
+                count += 1
+            else:
+                break
+        return count
 
     def _find_blocks(self, grid: List[List[Any]]) -> List[Tuple[int, int]]:
-        markers = [i for i, r in enumerate(grid) if self._has_table_marker(r)]
-        if markers:
-            blocks = []
-            for j, start in enumerate(markers):
-                limit = markers[j + 1] if j + 1 < len(markers) else len(grid)
-                end = limit - 1
-                while end > start and self._blank(grid[end]):
-                    end -= 1
-                if end > start:
-                    blocks.append((start, end))
-            return blocks
+        # Candidate marker rows: any row containing "TABLE <letter/digit>"
+        all_markers = [i for i, r in enumerate(grid) if self._has_table_marker(r)]
 
+        if all_markers:
+            first_nonblank = next((i for i, r in enumerate(grid) if not self._blank(r)), -1)
+            # A marker is a genuine new-block start only when it is:
+            #   (a) the first non-blank row in the sheet, OR
+            #   (b) preceded by ≥2 consecutive blank rows
+            markers = [
+                mk for mk in all_markers
+                if mk == first_nonblank or self._count_preceding_blanks(grid, mk) >= 2
+            ]
+
+            if markers:
+                blocks = []
+                for j, start in enumerate(markers):
+                    limit = markers[j + 1] if j + 1 < len(markers) else len(grid)
+                    end = limit - 1
+                    while end > start and self._blank(grid[end]):
+                        end -= 1
+                    if end > start:
+                        blocks.append((start, end))
+                return blocks
+
+        # Fallback: blank-row based detection (sheets without TABLE markers)
         blocks, current, blanks = [], None, 0
         for i, row in enumerate(grid):
             if self._blank(row):
@@ -865,6 +905,180 @@ Rules:
 
         return [{"name": t.get("title", f"Table {i+1}"), "table_ids": [t["id"]]}
                 for i, t in enumerate(tables_meta)]
+
+    def detect_linkages(self, tables_meta: list) -> list:
+        """
+        Linkage detection with semantic column-name matching.
+
+        Phase 1 (heuristic): collect every categorical column from every table.
+        Phase 2 (LLM): send ALL categorical columns to Claude and ask it to group
+          columns that represent the same dimension even when names differ
+          (e.g. "Sex" and "Gender", "Area" and "Area Type").
+        Fallback: exact-name matching with identity value maps.
+        """
+        if len(tables_meta) < 2:
+            return []
+
+        SKIP_COLS = {"sl_no", "s.no", "sr_no", "sno", "sr.no", "no.", "no",
+                     "serial", "serial no", "serial no.", "s no"}
+
+        def unique_str_values(col: str, rows: list) -> List[str]:
+            seen: set = set()
+            out: list = []
+            for row in rows:
+                v = row.get(col)
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s and s not in seen:
+                    seen.add(s)
+                    out.append(s)
+            return out
+
+        def is_categorical(values: List[str]) -> bool:
+            if not values:
+                return False
+            def _is_num(s: str) -> bool:
+                try:
+                    float(s.replace(",", ""))
+                    return True
+                except ValueError:
+                    return False
+            return sum(1 for v in values if _is_num(v)) < len(values) * 0.5
+
+        # ── Phase 1: collect ALL categorical columns from ALL tables ──────────
+        all_cat: List[Dict] = []
+        for t in tables_meta:
+            for col in t.get("columns", []):
+                if col.lower().strip() in SKIP_COLS:
+                    continue
+                vals = unique_str_values(col, t.get("rows", []))
+                if is_categorical(vals) and vals:
+                    all_cat.append({
+                        "table_id": t["id"],
+                        "column": col,
+                        "values": vals[:10],
+                    })
+
+        if not all_cat:
+            return []
+
+        # ── Phase 2: LLM groups columns by semantic meaning ───────────────────
+        col_lines = []
+        for e in all_cat:
+            vals_str = ", ".join(f'"{v}"' for v in e["values"][:6])
+            col_lines.append(
+                f'  table={e["table_id"]!r}  col={e["column"]!r}  values=[{vals_str}]'
+            )
+
+        prompt = f"""Indian government statistical tables (CRS / MOSPI / Census standards).
+
+Below are ALL categorical columns found across {len(tables_meta)} tables.
+
+{chr(10).join(col_lines)}
+
+Task: group columns that represent the SAME dimension, even when column names differ.
+Examples of equivalent names:
+- "Sex" = "Gender" = "Sex of Deceased"
+- "Area" = "Area Type" = "Place of Residence" = "Residence Type" = "Rural/Urban"
+- "Month" = "Month of Death" = "Month of Birth" = "Month of Occurrence"
+- "Care Setting" = "Place of Delivery" = "Place of Death" = "Institutional/Domiciliary"
+- "Geographic Area" = "District" = "Local Bodies" = "Local Body" = "Area Name" = "Administrative Unit" = "Municipal Council" = "Place" = "Geographic Area / District"
+  (all these refer to the Indian administrative geography dimension — merge them into ONE linkage)
+
+For each group (dimension) that appears in ≥2 DIFFERENT tables, produce one linkage.
+Each table_link must use the EXACT table id and column name from the input above.
+
+Canonical codes (CRS/MOSPI):
+- Sex/Gender : Male/Males/M → M | Female/Females/F → F | Others → O | Total/Both/Persons/All → __TOTAL__
+- Area       : Rural/Village/R → RURAL | Urban/Municipal/U → URBAN | Total/All/Combined → __TOTAL__
+- Care Setting: Institutional/Inst/Hospital → INST | Home/Domiciliary/Non-Inst → HOME | Not Stated → NS | Total → __TOTAL__
+- Month      : January/Jan → 1 | February/Feb → 2 | March/Mar → 3 | April/Apr → 4 | May → 5 | June/Jun → 6 | July/Jul → 7 | August/Aug → 8 | September/Sep → 9 | October/Oct → 10 | November/Nov → 11 | December/Dec → 12 | Total/Annual → __TOTAL__
+- Occupation : keep raw string unchanged
+- Any "Total"/"Grand Total"/"All" in any column → __TOTAL__
+
+Return ONLY valid JSON, no prose, no markdown fences:
+{{
+  "linkages": [
+    {{
+      "dimension": "Human-readable name",
+      "canonical": "snake_case_id",
+      "description": "One sentence describing what this dimension classifies",
+      "table_links": [
+        {{
+          "table_id": "exact id from input",
+          "column": "exact column name from input",
+          "value_map": {{"raw value": "CANONICAL or __TOTAL__"}}
+        }}
+      ]
+    }}
+  ]
+}}"""
+
+        try:
+            resp = _call_with_retry(
+                self.client,
+                model=ANTHROPIC_MODEL,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = resp.content[0].text.strip()
+            parsed = _extract_json_with_key(text, "linkages")
+        except Exception:
+            parsed = None
+
+        if parsed:
+            result = []
+            seen: set = set()
+            for lnk in parsed.get("linkages", []):
+                canonical = lnk.get("canonical", "").strip()
+                if not canonical or canonical in seen:
+                    continue
+                seen.add(canonical)
+                table_links = []
+                for tl in lnk.get("table_links", []):
+                    tid = tl.get("table_id", "")
+                    col = tl.get("column", "")
+                    vmap = tl.get("value_map", {})
+                    if tid and col and vmap:
+                        table_links.append({"table_id": tid, "column": col, "value_map": vmap})
+                if len(table_links) >= 2:
+                    result.append({
+                        "dimension": lnk.get("dimension", canonical),
+                        "canonical": canonical,
+                        "description": lnk.get("description", ""),
+                        "table_links": table_links,
+                    })
+            if result:
+                return result
+
+        # ── Fallback: exact-name matching with identity value maps ────────────
+        col_catalog: Dict[str, List[Dict]] = {}
+        for e in all_cat:
+            col_catalog.setdefault(e["column"], []).append(e)
+        shared = {c: v for c, v in col_catalog.items() if len(v) >= 2}
+        if not shared:
+            return []
+        result = []
+        for col, entries in shared.items():
+            all_vals: set = set()
+            for e in entries:
+                all_vals.update(e["values"])
+            vmap = {v: v.upper().strip() for v in all_vals}
+            for v in list(vmap):
+                if vmap[v] in ("TOTAL", "ALL", "GRAND TOTAL", "BOTH",
+                               "PERSONS", "ALL AREAS", "COMBINED"):
+                    vmap[v] = "__TOTAL__"
+            result.append({
+                "dimension": col,
+                "canonical": col.lower().replace(" ", "_").replace("/", "_"),
+                "description": f"Shared column '{col}' across {len(entries)} tables",
+                "table_links": [
+                    {"table_id": e["table_id"], "column": col, "value_map": vmap}
+                    for e in entries
+                ],
+            })
+        return result
 
     # ── Heuristic fallback ────────────────────────────────────────────────────
 
