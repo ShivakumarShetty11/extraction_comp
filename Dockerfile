@@ -15,8 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ .
 
-# Copy built React app into the location FastAPI serves as static files
-COPY --from=frontend /frontend/dist ./static
+# vite.config.js sets outDir: '../backend/static', so output lands here
+COPY --from=frontend /backend/static ./static
 
 EXPOSE 8080
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
