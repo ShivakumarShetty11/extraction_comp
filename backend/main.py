@@ -1,8 +1,11 @@
 import os
 import pathlib
+import json as _json
+import asyncio
+from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv()
 
 from extractor import TableExtractor
+import catalogue as _cat
 
 app = FastAPI(title="Table Extractor API")
 
@@ -89,17 +93,6 @@ async def table_metadata(request: Request):
     return {"categories": categories}
 
 
-@app.post("/api/detect-linkages")
-async def detect_linkages(request: Request):
-    """Detect shared categorical dimensions across tables that can be used as join keys."""
-    data = await request.json()
-    tables_meta = data.get("tables", [])
-    try:
-        linkages = _direct.detect_linkages(tables_meta)
-    except Exception as e:
-        raise HTTPException(500, f"Linkage detection error: {e}")
-    return {"linkages": linkages}
-
 
 @app.post("/api/group-tables")
 async def group_tables(request: Request):
@@ -111,6 +104,67 @@ async def group_tables(request: Request):
     except Exception as e:
         raise HTTPException(500, f"Grouping error: {e}")
     return {"groups": groups}
+
+
+@app.get("/api/catalogue/groups")
+async def get_catalogue_groups():
+    def _run():
+        conn = _cat.get_connection()
+        _cat.init_schema(conn)
+        groups = _cat.list_metadata_groups(conn)
+        conn.close()
+        return groups
+    try:
+        groups = await asyncio.to_thread(_run)
+        return {"groups": groups}
+    except Exception as e:
+        raise HTTPException(500, f"Catalogue error: {e}")
+
+
+@app.post("/api/catalogue/push")
+async def push_to_catalogue(
+    tables_json: str = Form(...),
+    metadata_mode: str = Form(...),
+    metadata_id: Optional[str] = Form(None),
+    meta_title: Optional[str] = Form(None),
+    meta_description: Optional[str] = Form(None),
+    meta_product: Optional[str] = Form(None),
+    meta_category: Optional[str] = Form(None),
+    meta_geography: Optional[str] = Form(None),
+    meta_frequency: Optional[str] = Form(None),
+    meta_time_period: Optional[str] = Form(None),
+    meta_data_source: Optional[str] = Form(None),
+    meta_future_release: Optional[str] = Form(None),
+    meta_key_statistics: Optional[str] = Form(None),
+    meta_remarks: Optional[str] = Form(None),
+    meta_excel: Optional[UploadFile] = File(None),
+):
+    tables = _json.loads(tables_json)
+    excel_filename = meta_excel.filename if meta_excel else None
+
+    # Per-table LLM enrichment (descriptions, classifications, units, age keys)
+    def _enrich():
+        return [_direct.enrich_for_catalogue(t) for t in tables]
+
+    def _run(enriched_data):
+        conn = _cat.get_connection()
+        _cat.init_schema(conn)
+        result = _cat.push_to_catalogue(
+            conn, tables, enriched_data, metadata_mode, metadata_id,
+            meta_title, meta_description, meta_product, meta_category,
+            meta_geography, meta_frequency, meta_time_period,
+            meta_data_source, meta_future_release, meta_key_statistics,
+            meta_remarks, excel_filename,
+        )
+        conn.close()
+        return result
+
+    try:
+        enriched = await asyncio.to_thread(_enrich)
+        result = await asyncio.to_thread(_run, enriched)
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Push error: {e}")
 
 
 # --- Serve React frontend (production) ---

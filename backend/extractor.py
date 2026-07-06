@@ -906,179 +906,71 @@ Rules:
         return [{"name": t.get("title", f"Table {i+1}"), "table_ids": [t["id"]]}
                 for i, t in enumerate(tables_meta)]
 
-    def detect_linkages(self, tables_meta: list) -> list:
-        """
-        Linkage detection with semantic column-name matching.
+    # ── DES Catalogue enrichment ──────────────────────────────────────────────
 
-        Phase 1 (heuristic): collect every categorical column from every table.
-        Phase 2 (LLM): send ALL categorical columns to Claude and ask it to group
-          columns that represent the same dimension even when names differ
-          (e.g. "Sex" and "Gender", "Area" and "Area Type").
-        Fallback: exact-name matching with identity value maps.
-        """
-        if len(tables_meta) < 2:
-            return []
+    def enrich_for_catalogue(self, table: dict) -> dict:
+        """Use Claude to generate DES-catalogue-compatible metadata for one table."""
+        columns = table.get("columns", [])
+        sample_rows = table.get("rows", [])[:6]
 
-        SKIP_COLS = {"sl_no", "s.no", "sr_no", "sno", "sr.no", "no.", "no",
-                     "serial", "serial no", "serial no.", "s no"}
+        prompt = f"""You are a data cataloguer for the Delhi Economic Survey (DES). Given an extracted Excel table, generate structured catalogue metadata.
 
-        def unique_str_values(col: str, rows: list) -> List[str]:
-            seen: set = set()
-            out: list = []
-            for row in rows:
-                v = row.get(col)
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s and s not in seen:
-                    seen.add(s)
-                    out.append(s)
-            return out
+Table Title: {table.get('title', '')}
+Sheet: {table.get('sheet', '')}
+Columns ({len(columns)}): {columns}
+Sample rows (first 6): {json.dumps(sample_rows, default=str)}
+Existing description: {table.get('description', '')}
 
-        def is_categorical(values: List[str]) -> bool:
-            if not values:
-                return False
-            def _is_num(s: str) -> bool:
-                try:
-                    float(s.replace(",", ""))
-                    return True
-                except ValueError:
-                    return False
-            return sum(1 for v in values if _is_num(v)) < len(values) * 0.5
-
-        # ── Phase 1: collect ALL categorical columns from ALL tables ──────────
-        all_cat: List[Dict] = []
-        for t in tables_meta:
-            for col in t.get("columns", []):
-                if col.lower().strip() in SKIP_COLS:
-                    continue
-                vals = unique_str_values(col, t.get("rows", []))
-                if is_categorical(vals) and vals:
-                    all_cat.append({
-                        "table_id": t["id"],
-                        "column": col,
-                        "values": vals[:10],
-                    })
-
-        if not all_cat:
-            return []
-
-        # ── Phase 2: LLM groups columns by semantic meaning ───────────────────
-        col_lines = []
-        for e in all_cat:
-            vals_str = ", ".join(f'"{v}"' for v in e["values"][:6])
-            col_lines.append(
-                f'  table={e["table_id"]!r}  col={e["column"]!r}  values=[{vals_str}]'
-            )
-
-        prompt = f"""Indian government statistical tables (CRS / MOSPI / Census standards).
-
-Below are ALL categorical columns found across {len(tables_meta)} tables.
-
-{chr(10).join(col_lines)}
-
-Task: group columns that represent the SAME dimension, even when column names differ.
-Examples of equivalent names:
-- "Sex" = "Gender" = "Sex of Deceased"
-- "Area" = "Area Type" = "Place of Residence" = "Residence Type" = "Rural/Urban"
-- "Month" = "Month of Death" = "Month of Birth" = "Month of Occurrence"
-- "Care Setting" = "Place of Delivery" = "Place of Death" = "Institutional/Domiciliary"
-- "Geographic Area" = "District" = "Local Bodies" = "Local Body" = "Area Name" = "Administrative Unit" = "Municipal Council" = "Place" = "Geographic Area / District"
-  (all these refer to the Indian administrative geography dimension — merge them into ONE linkage)
-
-For each group (dimension) that appears in ≥2 DIFFERENT tables, produce one linkage.
-Each table_link must use the EXACT table id and column name from the input above.
-
-Canonical codes (CRS/MOSPI):
-- Sex/Gender : Male/Males/M → M | Female/Females/F → F | Others → O | Total/Both/Persons/All → __TOTAL__
-- Area       : Rural/Village/R → RURAL | Urban/Municipal/U → URBAN | Total/All/Combined → __TOTAL__
-- Care Setting: Institutional/Inst/Hospital → INST | Home/Domiciliary/Non-Inst → HOME | Not Stated → NS | Total → __TOTAL__
-- Month      : January/Jan → 1 | February/Feb → 2 | March/Mar → 3 | April/Apr → 4 | May → 5 | June/Jun → 6 | July/Jul → 7 | August/Aug → 8 | September/Sep → 9 | October/Oct → 10 | November/Nov → 11 | December/Dec → 12 | Total/Annual → __TOTAL__
-- Occupation : keep raw string unchanged
-- Any "Total"/"Grand Total"/"All" in any column → __TOTAL__
-
-Return ONLY valid JSON, no prose, no markdown fences:
+Return ONLY a JSON object with exactly these fields:
 {{
-  "linkages": [
-    {{
-      "dimension": "Human-readable name",
-      "canonical": "snake_case_id",
-      "description": "One sentence describing what this dimension classifies",
-      "table_links": [
-        {{
-          "table_id": "exact id from input",
-          "column": "exact column name from input",
-          "value_map": {{"raw value": "CANONICAL or __TOTAL__"}}
-        }}
-      ]
-    }}
-  ]
-}}"""
+  "short_description": "1-2 sentence factual summary of what data this table contains",
+  "long_description": "3-5 sentence detailed description: what is measured, geographic scope, time period, disaggregation levels, and how to interpret the data",
+  "units": "measurement unit as a short string, e.g. 'Count', 'Percentage', 'Rs. Crore', 'Lakhs', 'Rate per 1000'",
+  "classifications": {{
+    "dimension_name": ["value1", "value2"]
+  }},
+  "age_column_keys": {{
+    "col_name_or_key": "readable age label"
+  }}
+}}
 
+Rules for classifications:
+- Identify categorical dimensions from column names and sample data values (e.g. gender_classification, area_type, administrative_body, place_of_occurrence)
+- For each dimension list up to 15 unique values found in column names or sample data
+- Use snake_case dimension names
+- Do NOT include numeric/quantitative columns as classifications
+- If no clear categorical dimensions exist, return an empty object {{}}
+
+Rules for age_column_keys:
+- Only populate if the table has columns representing age groups (e.g. "<1", "1-4", "15-24", "65+")
+- Map the column name to a readable human label
+- Return empty object {{}} if no age-related columns exist
+
+Return only valid JSON, no markdown fences, no explanation."""
+
+        resp = _call_with_retry(
+            self.client,
+            model=ANTHROPIC_MODEL,
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        # strip markdown fences
+        text = re.sub(r"^```[a-z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
         try:
-            resp = _call_with_retry(
-                self.client,
-                model=ANTHROPIC_MODEL,
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = resp.content[0].text.strip()
-            parsed = _extract_json_with_key(text, "linkages")
-        except Exception:
-            parsed = None
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = _extract_json_with_key(text, "short_description")
+            result = parsed or {}
 
-        if parsed:
-            result = []
-            seen: set = set()
-            for lnk in parsed.get("linkages", []):
-                canonical = lnk.get("canonical", "").strip()
-                if not canonical or canonical in seen:
-                    continue
-                seen.add(canonical)
-                table_links = []
-                for tl in lnk.get("table_links", []):
-                    tid = tl.get("table_id", "")
-                    col = tl.get("column", "")
-                    vmap = tl.get("value_map", {})
-                    if tid and col and vmap:
-                        table_links.append({"table_id": tid, "column": col, "value_map": vmap})
-                if len(table_links) >= 2:
-                    result.append({
-                        "dimension": lnk.get("dimension", canonical),
-                        "canonical": canonical,
-                        "description": lnk.get("description", ""),
-                        "table_links": table_links,
-                    })
-            if result:
-                return result
-
-        # ── Fallback: exact-name matching with identity value maps ────────────
-        col_catalog: Dict[str, List[Dict]] = {}
-        for e in all_cat:
-            col_catalog.setdefault(e["column"], []).append(e)
-        shared = {c: v for c, v in col_catalog.items() if len(v) >= 2}
-        if not shared:
-            return []
-        result = []
-        for col, entries in shared.items():
-            all_vals: set = set()
-            for e in entries:
-                all_vals.update(e["values"])
-            vmap = {v: v.upper().strip() for v in all_vals}
-            for v in list(vmap):
-                if vmap[v] in ("TOTAL", "ALL", "GRAND TOTAL", "BOTH",
-                               "PERSONS", "ALL AREAS", "COMBINED"):
-                    vmap[v] = "__TOTAL__"
-            result.append({
-                "dimension": col,
-                "canonical": col.lower().replace(" ", "_").replace("/", "_"),
-                "description": f"Shared column '{col}' across {len(entries)} tables",
-                "table_links": [
-                    {"table_id": e["table_id"], "column": col, "value_map": vmap}
-                    for e in entries
-                ],
-            })
-        return result
+        return {
+            "short_description": result.get("short_description", table.get("description", "")),
+            "long_description": result.get("long_description", table.get("description", "")),
+            "units": result.get("units", "Count"),
+            "classifications": result.get("classifications", {}),
+            "age_column_keys": result.get("age_column_keys", {}),
+        }
 
     # ── Heuristic fallback ────────────────────────────────────────────────────
 

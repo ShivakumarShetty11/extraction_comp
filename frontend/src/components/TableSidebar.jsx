@@ -155,71 +155,11 @@ function TableItem({ tbl, selectedId, onSelect }) {
   )
 }
 
-function LinkageSection({ linkages, linkageLoading, onDetectLinkages, onJoin, tableMap }) {
-  const [collapsed, setCollapsed] = useState(false)
-
-  return (
-    <div className="linkage-section">
-      <div className="linkage-section-header">
-        <button className="linkage-toggle" onClick={() => setCollapsed((v) => !v)}>
-          <span className="linkage-toggle-icon">{collapsed ? '▶' : '▼'}</span>
-          <span className="linkage-toggle-label">Linkages</span>
-          {linkages && <span className="linkage-count">{linkages.length}</span>}
-        </button>
-        <button
-          className={`detect-btn${linkageLoading ? ' detect-btn-loading' : ''}`}
-          onClick={onDetectLinkages}
-          disabled={linkageLoading}
-          title="Ask Claude to find shared categorical dimensions across all tables"
-        >
-          {linkageLoading ? '…' : linkages ? '↻' : 'Detect'}
-        </button>
-      </div>
-
-      {!collapsed && (
-        <div className="linkage-list">
-          {!linkages && !linkageLoading && (
-            <div className="linkage-hint">
-              Click Detect to find join dimensions shared across tables (e.g. Area Type, Gender).
-            </div>
-          )}
-          {linkages && linkages.length === 0 && (
-            <div className="linkage-hint">No shared dimensions found.</div>
-          )}
-          {linkages && linkages.map((lnk) => (
-            <div key={lnk.canonical} className="linkage-item">
-              <div className="linkage-item-top">
-                <span className="linkage-dim-name">{lnk.dimension}</span>
-                <button
-                  className="join-open-btn"
-                  onClick={() => onJoin(lnk)}
-                  title={`Join tables on ${lnk.dimension}`}
-                >
-                  Join
-                </button>
-              </div>
-              <div className="linkage-item-desc">{lnk.description}</div>
-              <div className="linkage-item-tables">
-                {lnk.table_links.map((tl) => (
-                  <span key={tl.table_id} className="linkage-table-chip" title={`col: ${tl.column}`}>
-                    {tableMap[tl.table_id]?.title?.slice(0, 22) || tl.table_id}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Main export ─────────────────────────────────────────────────────────────
 
 export default function TableSidebar({
   tables, selectedId, onSelect, filename, resultMode,
-  groups, grouping, onGroup,
-  linkages, linkageLoading, onDetectLinkages, onJoin,
+  groups, grouping, onGroup, onPush,
 }) {
   const [groupMeta, setGroupMeta] = useState({})
   const tableMap = Object.fromEntries(tables.map((t) => [t.id, t]))
@@ -243,6 +183,9 @@ export default function TableSidebar({
           title="Ask Claude to group similar tables by topic"
         >
           {grouping ? 'Grouping…' : groups ? '↻ Regroup' : '⊹ Group Similar'}
+        </button>
+        <button className="push-catalogue-btn" onClick={onPush} title="Push extracted tables to Data Catalogue">
+          ↑ Push to Catalogue
         </button>
       </div>
 
@@ -278,14 +221,6 @@ export default function TableSidebar({
           ))
         )}
       </div>
-
-      <LinkageSection
-        linkages={linkages}
-        linkageLoading={linkageLoading}
-        onDetectLinkages={onDetectLinkages}
-        onJoin={onJoin}
-        tableMap={tableMap}
-      />
     </aside>
   )
 }

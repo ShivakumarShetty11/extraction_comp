@@ -2,7 +2,7 @@ import { useState } from 'react'
 import FileUpload from './components/FileUpload'
 import TableSidebar from './components/TableSidebar'
 import TableViewer from './components/TableViewer'
-import JoinViewer from './components/JoinViewer'
+import PushModal from './components/PushModal'
 
 const MODE_CONFIG = {
   direct_llm: {
@@ -31,19 +31,13 @@ export default function App() {
   const [resultMode, setResultMode] = useState(null)
   const [groups, setGroups] = useState(null)
   const [grouping, setGrouping] = useState(false)
-  const [linkages, setLinkages] = useState(null)
-  const [linkageLoading, setLinkageLoading] = useState(false)
-  const [view, setView] = useState('table')   // 'table' | 'join'
-  const [joinConfig, setJoinConfig] = useState(null)
+  const [pushOpen, setPushOpen] = useState(false)
 
   const resetResults = () => {
     setTables([])
     setSelectedId(null)
     setResultMode(null)
     setGroups(null)
-    setLinkages(null)
-    setView('table')
-    setJoinConfig(null)
   }
 
   const handleUpload = async (file) => {
@@ -89,40 +83,6 @@ export default function App() {
     } finally {
       setGrouping(false)
     }
-  }
-
-  const handleDetectLinkages = async () => {
-    setLinkageLoading(true)
-    try {
-      // Send only a sample of rows to keep the prompt compact
-      const meta = tables.map(({ id, title, sheet, description, columns, rows }) => ({
-        id, title, sheet, description, columns,
-        rows: rows.slice(0, 5),
-      }))
-      const res = await fetch('/api/detect-linkages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tables: meta }),
-      })
-      if (!res.ok) throw new Error('Linkage detection failed')
-      const data = await res.json()
-      setLinkages(data.linkages)
-    } catch (e) {
-      setLinkages([])
-      console.error('Linkage detection error:', e)
-    } finally {
-      setLinkageLoading(false)
-    }
-  }
-
-  const handleOpenJoin = (linkage) => {
-    setJoinConfig({ linkage })
-    setView('join')
-  }
-
-  const handleCloseJoin = () => {
-    setView('table')
-    setJoinConfig(null)
   }
 
   const selectedTable = tables.find((t) => t.id === selectedId)
@@ -209,25 +169,16 @@ export default function App() {
             <TableSidebar
               tables={tables}
               selectedId={selectedId}
-              onSelect={(id) => { setSelectedId(id); setView('table'); setJoinConfig(null) }}
+              onSelect={setSelectedId}
               filename={filename}
               resultMode={resultMode}
               groups={groups}
               grouping={grouping}
               onGroup={handleGroup}
-              linkages={linkages}
-              linkageLoading={linkageLoading}
-              onDetectLinkages={handleDetectLinkages}
-              onJoin={handleOpenJoin}
+              onPush={() => setPushOpen(true)}
             />
             <main className="table-main">
-              {view === 'join' && joinConfig ? (
-                <JoinViewer
-                  tables={tables}
-                  joinConfig={joinConfig}
-                  onClose={handleCloseJoin}
-                />
-              ) : selectedTable ? (
+              {selectedTable ? (
                 <TableViewer table={selectedTable} resultMode={resultMode} />
               ) : (
                 <div className="no-selection">Select a table from the sidebar</div>
@@ -235,6 +186,7 @@ export default function App() {
             </main>
           </div>
         )}
+        {pushOpen && <PushModal tables={tables} groups={groups} onClose={() => setPushOpen(false)} />}
       </div>
     </div>
   )
