@@ -25,8 +25,7 @@ app.add_middleware(
 )
 
 _key = os.getenv("ANTHROPIC_API_KEY")
-_direct = TableExtractor(api_key=_key, use_agent=False)
-_agent  = TableExtractor(api_key=_key, use_agent=True)
+_direct = TableExtractor(api_key=_key)
 
 
 def _read_file(file: UploadFile) -> bytes:
@@ -59,20 +58,6 @@ async def extract_direct(file: UploadFile = File(...)):
         raise HTTPException(500, f"Extraction error: {e}")
     return {"filename": file.filename, "mode": "direct_llm", "table_count": len(tables), "tables": tables}
 
-
-@app.post("/api/extract-agent")
-async def extract_agent(file: UploadFile = File(...)):
-    """AI Agent mode — ReAct loop with tool calling per table."""
-    if not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(400, "Only .xlsx files are supported (re-save .xls as .xlsx)")
-    content = await file.read()
-    try:
-        tables = _agent.extract_from_file(content, file.filename)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Extraction error: {e}")
-    return {"filename": file.filename, "mode": "agent", "table_count": len(tables), "tables": tables}
 
 
 @app.post("/api/table-metadata")
@@ -121,6 +106,20 @@ async def get_catalogue_groups():
         raise HTTPException(500, f"Catalogue error: {e}")
 
 
+def _upload_excel_to_gcs(file_bytes: bytes, filename: str) -> str:
+    """Upload Excel bytes to GCS and return the public gs:// URL."""
+    from google.cloud import storage as gcs
+    bucket_name = os.getenv("GCS_BUCKET_NAME", "")
+    if not bucket_name:
+        raise ValueError("GCS_BUCKET_NAME environment variable is not set")
+    client = gcs.Client()
+    bucket = client.bucket(bucket_name)
+    blob_name = f"metadata_excel/{filename}"
+    blob = bucket.blob(blob_name)
+    blob.upload_from_string(file_bytes, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return f"gs://{bucket_name}/{blob_name}"
+
+
 @app.post("/api/catalogue/push")
 async def push_to_catalogue(
     tables_json: str = Form(...),
@@ -134,13 +133,25 @@ async def push_to_catalogue(
     meta_frequency: Optional[str] = Form(None),
     meta_time_period: Optional[str] = Form(None),
     meta_data_source: Optional[str] = Form(None),
+    meta_last_updated: Optional[str] = Form(None),
     meta_future_release: Optional[str] = Form(None),
     meta_key_statistics: Optional[str] = Form(None),
     meta_remarks: Optional[str] = Form(None),
     meta_excel: Optional[UploadFile] = File(None),
 ):
     tables = _json.loads(tables_json)
-    excel_filename = meta_excel.filename if meta_excel else None
+
+    # Upload Excel to GCS if provided
+    excel_url = None
+    if meta_excel and meta_excel.filename:
+        excel_bytes = await meta_excel.read()
+        if excel_bytes:
+            try:
+                excel_url = await asyncio.to_thread(
+                    _upload_excel_to_gcs, excel_bytes, meta_excel.filename
+                )
+            except Exception as e:
+                raise HTTPException(500, f"GCS upload error: {e}")
 
     # Per-table LLM enrichment (descriptions, classifications, units, age keys)
     def _enrich():
@@ -153,8 +164,8 @@ async def push_to_catalogue(
             conn, tables, enriched_data, metadata_mode, metadata_id,
             meta_title, meta_description, meta_product, meta_category,
             meta_geography, meta_frequency, meta_time_period,
-            meta_data_source, meta_future_release, meta_key_statistics,
-            meta_remarks, excel_filename,
+            meta_data_source, meta_last_updated, meta_future_release,
+            meta_key_statistics, meta_remarks, excel_url,
         )
         conn.close()
         return result

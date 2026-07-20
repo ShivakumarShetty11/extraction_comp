@@ -2,7 +2,6 @@ import io
 import json
 import re
 import time
-import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -11,187 +10,63 @@ from anthropic import RateLimitError
 
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Agent tool definitions — Anthropic format (input_schema, not parameters)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-AGENT_TOOLS = [
-    {
-        "name": "scan_table_rows",
-        "description": (
-            "Scan sample rows from the table body to classify each row. "
-            "Identifies: header rows (mostly text labels), data rows (numeric values), "
-            "and column-number rows to skip (pattern like '(1) (2) (3)'). "
-            "Call this first to understand the table structure."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "sample_rows": {
-                    "type": "array",
-                    "items": {"type": "array"},
-                    "description": "Array of rows; each row is an array of cell values (null for empty cells).",
-                }
-            },
-            "required": ["sample_rows"],
-        },
-    },
-    {
-        "name": "detect_merged_cell_groups",
-        "description": (
-            "Detect merged-cell groups in a row by finding runs of consecutive identical values. "
-            "In Excel, merged cells are filled with the same value — so 'AGE IN YEARS' appearing "
-            "12 times in a row means that header spans 12 columns. "
-            "Call this for each header row to understand multi-level column structure."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "row": {
-                    "type": "array",
-                    "description": "A single table row as an array of cell values.",
-                },
-                "row_index": {
-                    "type": "integer",
-                    "description": "0-based index of this row in the sample.",
-                },
-            },
-            "required": ["row", "row_index"],
-        },
-    },
-    {
-        "name": "build_flat_column_names",
-        "description": (
-            "Build flat column names by combining multi-level header rows and merge group info. "
-            "For a group header like 'AGE IN YEARS' spanning cols 4-15, and sub-columns "
-            "'<1','1-4','5-14'... produces 'AGE IN YEARS_<1', 'AGE IN YEARS_1-4', etc. "
-            "Call this last after you know which rows are headers and their merge patterns."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "header_rows": {
-                    "type": "array",
-                    "items": {"type": "array"},
-                    "description": "The header rows (arrays of cell values).",
-                },
-                "merge_groups": {
-                    "type": "array",
-                    "description": "List of merge-group dicts from detect_merged_cell_groups calls.",
-                },
-                "n_cols": {
-                    "type": "integer",
-                    "description": "Exact number of columns required in output.",
-                },
-            },
-            "required": ["header_rows", "merge_groups", "n_cols"],
-        },
-    },
-]
+DDI_PREFIX = "DDI_DEL_DES_VS"
+DDI_YEAR   = "2024"
+DDI_VER    = "V1"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Tool executor functions (deterministic, no LLM)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _exec_scan_table_rows(sample_rows: List[List[Any]]) -> str:
-    results = []
-    for i, row in enumerate(sample_rows):
-        non_none = [v for v in row if v is not None]
-        if not non_none:
-            results.append({"row": i, "classification": "blank"})
-            continue
-        texts = sum(1 for v in non_none if isinstance(v, str))
-        nums = sum(1 for v in non_none if isinstance(v, (int, float)))
-        empty = len(row) - len(non_none)
-        col_num = sum(1 for v in non_none if re.match(r"^\(\d+\)$", str(v).strip()))
-        is_col_num_row = col_num > len(non_none) * 0.5
-        results.append({
-            "row": i,
-            "classification": "col_number_row" if is_col_num_row
-                              else ("header_candidate" if texts > nums else "data_row"),
-            "text_cells": texts,
-            "number_cells": nums,
-            "empty_cells": empty,
-            "sample_values": [str(v)[:25] for v in non_none[:5]],
-        })
-    return json.dumps(results, indent=2)
+def _row_text(row) -> str:
+    """Join non-empty cells of a raw header row into a single string."""
+    if isinstance(row, (list, tuple)):
+        return " ".join(str(c).strip() for c in row if c is not None and str(c).strip())
+    return str(row).strip()
 
 
-def _exec_detect_merged_cell_groups(row: List[Any], row_index: int) -> str:
-    groups = []
-    i = 0
-    while i < len(row):
-        v = row[i]
-        if v is None:
-            i += 1
-            continue
-        j = i + 1
-        while j < len(row) and row[j] == v:
-            j += 1
-        groups.append({
-            "value": str(v)[:50],
-            "start_col": i,
-            "end_col": j - 1,
-            "span": j - i,
-            "is_merged": j - i > 1,
-        })
-        i = j
-    return json.dumps({"row": row_index, "groups": groups}, indent=2)
+def _build_ddi_id(tbl: dict) -> str:
+    """
+    Build a DDI-format table ID from the table's raw_header_rows.
 
+    Row 0  e.g. "Table : D-3"                              → code = "D3"
+    Row 1  e.g. "Time Gap Registration in Death (Urban)"   → top  = "URBAN"
+    Row 2  e.g. "Religion-All"   (optional)                → nxt  = "ALL"
 
-def _exec_build_flat_column_names(
-    header_rows: List[List[Any]], merge_groups: List[Dict], n_cols: int
-) -> str:
-    if not header_rows:
-        return json.dumps([f"Col_{i+1}" for i in range(n_cols)])
+    Result: DDI_DEL_DES_VS_D3_URBAN_2024_V1
+    """
+    headers = tbl.get("raw_header_rows", [])
 
-    if len(header_rows) == 1:
-        cols = [str(v).strip() if v is not None else f"Col_{i+1}" for i, v in enumerate(header_rows[0])]
-        while len(cols) < n_cols:
-            cols.append(f"Col_{len(cols)+1}")
-        return json.dumps(cols[:n_cols])
+    # Table code: "D-3" → "D3", "B-14" → "B14"
+    code = ""
+    if headers:
+        m = re.search(r"\b([A-Za-z]-\d+(?:\.\d+)?)\b", _row_text(headers[0]))
+        if m:
+            code = re.sub(r"[^A-Z0-9]", "", m.group(1).upper())
 
-    row0 = list(header_rows[0])
-    row1 = list(header_rows[1]) if len(header_rows) > 1 else []
+    # Top-level: parenthetical in row 1 → "(Urban)" → "URBAN"
+    top = ""
+    if len(headers) > 1:
+        m = re.search(r"\(([^)]+)\)", _row_text(headers[1]))
+        if m:
+            top = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
 
-    # Build a col→group_label map from merge_groups for row 0.
-    # merge_groups is a list of dicts returned by detect_merged_cell_groups;
-    # each dict has {"row": int, "groups": [{value, start_col, end_col, span, is_merged}]}.
-    group_label: Dict[int, str] = {}
-    for mg in merge_groups:
-        if not isinstance(mg, dict):
-            continue
-        if mg.get("row", -1) != 0:
-            continue
-        for g in mg.get("groups", []):
-            if g.get("is_merged"):
-                for col_idx in range(g["start_col"], g["end_col"] + 1):
-                    group_label[col_idx] = str(g["value"]).strip()
+    # Next-level: text after last dash in row 2 → "Religion-All" → "ALL"
+    nxt = ""
+    if len(headers) > 2:
+        text = _row_text(headers[2])
+        m = re.search(r"-\s*(.+)$", text)
+        if m:
+            nxt = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
 
-    cols = []
-    for i in range(n_cols):
-        v0 = row0[i] if i < len(row0) else None
-        v1 = row1[i] if i < len(row1) else None
+    parts = [DDI_PREFIX]
+    if code:
+        parts.append(code)
+    if top:
+        parts.append(top)
+    if nxt:
+        parts.append(nxt)
+    parts.append(DDI_YEAR)
+    parts.append(DDI_VER)
 
-        # Prefer the authoritative group label from merge_groups for row 0;
-        # fall back to counting repeated values if merge_groups wasn't provided.
-        group = group_label.get(i)
-        if group is None and v0 is not None:
-            same_count = sum(1 for x in row0 if x == v0)
-            if same_count > 1:
-                group = str(v0).strip()
-
-        if group and v1 is not None:
-            cols.append(f"{group}_{str(v1).strip()}")
-        elif v1 is not None:
-            cols.append(str(v1).strip())
-        elif v0 is not None:
-            cols.append(str(v0).strip())
-        else:
-            cols.append(f"Col_{i+1}")
-
-    return json.dumps(cols)
+    return "_".join(parts)
 
 
 def _parse_retry_delay(error: RateLimitError) -> Optional[float]:
@@ -272,23 +147,13 @@ def _extract_json_with_key(text: str, required_key: str) -> Optional[Dict]:
     return None
 
 
-TOOL_MAP = {
-    "scan_table_rows": lambda a: _exec_scan_table_rows(a["sample_rows"]),
-    "detect_merged_cell_groups": lambda a: _exec_detect_merged_cell_groups(a["row"], a["row_index"]),
-    "build_flat_column_names": lambda a: _exec_build_flat_column_names(
-        a["header_rows"], a.get("merge_groups", []), a["n_cols"]
-    ),
-}
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
-# TableExtractor — shared openpyxl logic + two structure-analysis strategies
+# TableExtractor
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TableExtractor:
-    def __init__(self, api_key: Optional[str] = None, use_agent: bool = False):
+    def __init__(self, api_key: Optional[str] = None):
         self.client = anthropic.Anthropic(api_key=api_key)
-        self.use_agent = use_agent
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -303,9 +168,20 @@ class TableExtractor:
             ws = wb[sheet_name]
             all_tables.extend(self._process_sheet(ws, sheet_name, filename))
 
-        # Give every table a guaranteed-unique ID.
+        # Generate DDI-format table ID from raw header rows.
+        # Format: DDI_DEL_DES_VS_{TABLECODE}_{TOPLEVEL}[_{NEXTLEVEL}]_2024_V1
         for tbl in all_tables:
-            tbl["id"] = str(uuid.uuid4())
+            tbl["id"] = _build_ddi_id(tbl)
+
+        # Deduplicate IDs within this batch (append _2, _3 for collisions)
+        seen_ids: Dict[str, int] = {}
+        for tbl in all_tables:
+            base = tbl["id"]
+            if base in seen_ids:
+                seen_ids[base] += 1
+                tbl["id"] = f"{base}_{seen_ids[base]}"
+            else:
+                seen_ids[base] = 1
 
         # Within each sheet, if multiple tables share the same title (ignoring
         # whitespace differences like "TABLE: D-3" vs "TABLE : D-3"), keep the
@@ -448,18 +324,11 @@ class TableExtractor:
 
         n_cols = max(len(r) for r in body)
 
-        agent_steps: Optional[List[Dict]] = None
         try:
-            if self.use_agent:
-                structure, agent_steps = self._agent_structure(body, title, description, n_cols)
-            else:
-                structure = self._direct_llm_structure(body, title, description, n_cols)
+            structure = self._direct_llm_structure(body, title, description, n_cols)
         except Exception as e:
             print(f"Structure analysis failed ({e}), using heuristic")
             structure = self._heuristic_structure(body, n_cols)
-            if self.use_agent:
-                # Always surface a steps list so the UI shows what happened
-                agent_steps = [{"type": "fallback", "content": f"Agent error: {str(e)[:400]}. Fell back to heuristic."}]
 
         header_rows: int = structure.get("header_rows", 1)
         skip_set: set = set(structure.get("skip_rows", []))
@@ -526,7 +395,7 @@ class TableExtractor:
             if len(raw_notes) >= 10:
                 break
 
-        result: Dict = {
+        return {
             "id": f"{filename}__{sheet_name}__{idx}",
             "title": title or f"Table {idx+1}",
             "description": description,
@@ -539,9 +408,6 @@ class TableExtractor:
             "raw_col_num_rows": raw_col_num_rows,
             "raw_notes": raw_notes,
         }
-        if agent_steps is not None:
-            result["agent_steps"] = agent_steps
-        return result
 
     # ── Title / description extraction ────────────────────────────────────────
 
@@ -620,130 +486,6 @@ Return ONLY valid JSON, no markdown fences."""
         text = resp.content[0].text.strip()
         text = re.sub(r"```[a-z]*\n?", "", text).strip().rstrip("`").strip()
         return json.loads(text)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # STRATEGY B — AI Agent (ReAct loop with tool calling)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _agent_structure(
-        self, body: List[List[Any]], title: str, description: str, n_cols: int
-    ) -> Tuple[Dict, List[Dict]]:
-        """Returns (structure_dict, agent_steps_list)."""
-
-        n_sample = min(6, len(body))   # keep token count low on free-tier APIs
-        sample = [
-            [v if isinstance(v, (int, float, str, type(None))) else str(v) for v in row]
-            for row in body[:n_sample]
-        ]
-
-        system_msg = (
-            "You are an expert data analyst extracting table structure from government Excel reports. "
-            "You have three tools available:\n"
-            "1. scan_table_rows — call this FIRST to classify each row (header vs data vs skip)\n"
-            "2. detect_merged_cell_groups — call this for each header row to find merged column groups\n"
-            "3. build_flat_column_names — call this LAST with all header rows and merge info\n\n"
-            "After using the tools, return your final answer as a plain JSON object (no markdown):\n"
-            '{"header_rows": <int>, "skip_rows": [<int>,...], "columns": [<str>,...]}\n'
-            f"The columns array MUST contain exactly {n_cols} entries."
-        )
-
-        user_msg = (
-            f"Table: {title}\n"
-            f"{f'Description: {description}' if description else ''}\n"
-            f"Total body rows: {len(body)}, Columns: {n_cols}\n\n"
-            f"Sample rows (JSON):\n{json.dumps(sample, indent=2)}\n\n"
-            f"Use your tools step-by-step, then return the final JSON structure."
-        )
-
-        # Anthropic: system is a top-level param; messages start with user turn
-        messages = [{"role": "user", "content": user_msg}]
-
-        steps: List[Dict] = []
-        structure: Optional[Dict] = None
-        tools_called: set = set()
-        required_tools = {"scan_table_rows", "detect_merged_cell_groups", "build_flat_column_names"}
-        MAX_ITER = 12
-
-        for iteration in range(MAX_ITER):
-            all_tools_done = required_tools.issubset(tools_called)
-            # Anthropic tool_choice: {"type":"any"} forces at least one tool call
-            tool_choice = {"type": "auto"} if all_tools_done else {"type": "any"}
-
-            resp = _call_with_retry(
-                self.client,
-                model=ANTHROPIC_MODEL,
-                system=system_msg,
-                messages=messages,
-                tools=AGENT_TOOLS,
-                tool_choice=tool_choice,
-                max_tokens=2048,
-            )
-
-            # Anthropic returns a list of content blocks (TextBlock / ToolUseBlock)
-            text_parts = [b.text for b in resp.content if hasattr(b, "text") and b.text]
-            tool_uses  = [b for b in resp.content if b.type == "tool_use"]
-            text = " ".join(text_parts)
-
-            # Record thought step
-            thought_step: Dict = {"type": "thought", "content": text}
-            if tool_uses:
-                thought_step["tool_calls"] = [
-                    {"tool": tu.name, "input_raw": json.dumps(tu.input)}
-                    for tu in tool_uses
-                ]
-            steps.append(thought_step)
-
-            # Append assistant turn (full content block list keeps context intact)
-            messages.append({"role": "assistant", "content": resp.content})
-
-            # No tool uses → final answer turn
-            if not tool_uses:
-                parsed = _extract_json_with_key(text, "header_rows")
-                if parsed is not None:
-                    structure = parsed
-                    steps.append({"type": "final_answer", "content": structure})
-                    break
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Return ONLY a JSON object — no prose, no markdown — with exactly these keys: "
-                        f"header_rows (int), skip_rows (list of ints), columns (list of exactly {n_cols} strings)."
-                    ),
-                })
-                continue
-
-            # Execute each tool use, collect all results into a single user message
-            tool_result_blocks = []
-            for tu in tool_uses:
-                tools_called.add(tu.name)
-                try:
-                    output = TOOL_MAP[tu.name](tu.input)
-                except Exception as e:
-                    output = json.dumps({"error": str(e)})
-
-                steps.append({
-                    "type": "tool_result",
-                    "tool": tu.name,
-                    "input": tu.input,
-                    "output": output,
-                })
-                tool_result_blocks.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu.id,
-                    "content": output,
-                })
-
-            # Anthropic requires all tool results in one user turn
-            messages.append({"role": "user", "content": tool_result_blocks})
-
-            # Brief pause between iterations to respect per-minute rate limits
-            time.sleep(2)
-
-        if structure is None:
-            structure = self._heuristic_structure(body, n_cols)
-            steps.append({"type": "fallback", "content": "Agent did not return valid JSON after all iterations. Used heuristic fallback."})
-
-        return structure, steps
 
     # ── LLM-based category metadata extraction ───────────────────────────────
 

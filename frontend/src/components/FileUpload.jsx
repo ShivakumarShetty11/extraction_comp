@@ -33,7 +33,7 @@ export default function FileUpload({ onUpload, loading }) {
         {loading ? (
           <>&#8987; Processing…</>
         ) : (
-          <>&#128193; Upload Excel (.xlsx)</>
+          <>&#128193; Upload Dataset</>
         )}
       </button>
     </>

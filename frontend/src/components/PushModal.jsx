@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react'
 
 const FREQUENCY_OPTIONS = ['Annual', 'Monthly', 'Quarterly', 'Decennial', 'Ad-hoc']
 
+function todayFormatted() {
+  return new Date().toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+}
+
 export default function PushModal({ tables, groups, onClose }) {
   const [existingGroups, setExistingGroups] = useState([])
   const [scope, setScope] = useState('all')
@@ -9,13 +13,14 @@ export default function PushModal({ tables, groups, onClose }) {
   const [selectedMetaId, setSelectedMetaId] = useState('')
   const [form, setForm] = useState({
     title: '',
-    description: '',
     product: '',
     category: '',
     geography: '',
     frequency: '',
     time_period: '',
     data_source: '',
+    description: '',
+    last_updated: todayFormatted(),
     future_release: '',
     key_statistics: '',
     remarks: '',
@@ -58,13 +63,14 @@ export default function PushModal({ tables, groups, onClose }) {
         fd.append('metadata_id', selectedMetaId)
       }
       fd.append('meta_title', form.title || '')
-      fd.append('meta_description', form.description || '')
       fd.append('meta_product', form.product || '')
       fd.append('meta_category', form.category || '')
       fd.append('meta_geography', form.geography || '')
       fd.append('meta_frequency', form.frequency || '')
       fd.append('meta_time_period', form.time_period || '')
       fd.append('meta_data_source', form.data_source || '')
+      fd.append('meta_description', form.description || '')
+      fd.append('meta_last_updated', form.last_updated || '')
       fd.append('meta_future_release', form.future_release || '')
       fd.append('meta_key_statistics', form.key_statistics || '')
       fd.append('meta_remarks', form.remarks || '')
@@ -93,7 +99,7 @@ export default function PushModal({ tables, groups, onClose }) {
     <div className="push-overlay">
       <div className="push-modal">
         <div className="push-modal-header">
-          <span className="push-modal-title">Push to Data Catalogue</span>
+          <span className="push-modal-title">CREATE METADATA</span>
           <button className="push-close" onClick={onClose}>✕</button>
         </div>
 
@@ -202,15 +208,6 @@ export default function PushModal({ tables, groups, onClose }) {
                       />
                     </div>
                     <div className="push-field">
-                      <label className="push-label">Description</label>
-                      <textarea
-                        className="push-input push-textarea"
-                        value={form.description}
-                        onChange={(e) => handleFormChange('description', e.target.value)}
-                        placeholder="Brief description of this dataset group"
-                      />
-                    </div>
-                    <div className="push-field">
                       <label className="push-label">Product</label>
                       <input
                         className="push-input"
@@ -264,13 +261,32 @@ export default function PushModal({ tables, groups, onClose }) {
                       />
                     </div>
                     <div className="push-field">
-                      <label className="push-label">Data Source</label>
+                      <label className="push-label">Source</label>
                       <input
                         className="push-input"
                         type="text"
                         value={form.data_source}
                         onChange={(e) => handleFormChange('data_source', e.target.value)}
                         placeholder="e.g. Census of India"
+                      />
+                    </div>
+                    <div className="push-field">
+                      <label className="push-label">Description</label>
+                      <textarea
+                        className="push-input push-textarea"
+                        value={form.description}
+                        onChange={(e) => handleFormChange('description', e.target.value)}
+                        placeholder="Brief description of this dataset group"
+                      />
+                    </div>
+                    <div className="push-field">
+                      <label className="push-label">Last Updated</label>
+                      <input
+                        className="push-input"
+                        type="text"
+                        value={form.last_updated}
+                        onChange={(e) => handleFormChange('last_updated', e.target.value)}
+                        placeholder="e.g. July, 2025"
                       />
                     </div>
                     <div className="push-field">

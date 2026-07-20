@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import * as XLSX from 'xlsx'
-import AgentLog from './AgentLog'
+
 
 const MAX_DISPLAY = 500
 
@@ -158,32 +158,23 @@ async function downloadMetadataExcel(table, setLoading) {
   }
 }
 
-export default function TableViewer({ table, resultMode }) {
+export default function TableViewer({ table }) {
   const [metaLoading, setMetaLoading] = useState(false)
   const displayRows = table.rows.slice(0, MAX_DISPLAY)
   const truncated = table.rows.length > MAX_DISPLAY
-
   return (
     <div className="table-viewer">
       <div className="viewer-header">
         <div className="viewer-title-row">
-          <div className="viewer-title">{table.title}</div>
-          {resultMode && (
-            <span className={`viewer-mode-badge ${resultMode === 'agent' ? 'badge-agent' : 'badge-llm'}`}>
-              {resultMode === 'agent' ? '🤖 AI Agent' : '⚡ Direct LLM'}
-            </span>
-          )}
+          <span className="catalogue-id-chip" title="Catalogue ID (dataset_id = table_id)">
+            {table.id}
+          </span>
         </div>
         {table.description && <div className="viewer-desc">{table.description}</div>}
         <div className="viewer-meta">
           <span className="meta-chip">Sheet: {table.sheet}</span>
           <span className="meta-chip">{table.row_count.toLocaleString()} rows</span>
           <span className="meta-chip">{table.columns.length} columns</span>
-          {table.agent_steps && (
-            <span className="meta-chip meta-chip-agent">
-              {table.agent_steps.length} agent steps
-            </span>
-          )}
           <button className="btn-csv" onClick={() => downloadCSV(table)}>
             ⬇ Download CSV
           </button>
@@ -192,12 +183,10 @@ export default function TableViewer({ table, resultMode }) {
             onClick={() => downloadMetadataExcel(table, setMetaLoading)}
             disabled={metaLoading}
           >
-            {metaLoading ? '⏳ Analysing…' : '⬇ Metadata Excel'}
+            {metaLoading ? '⏳ Analysing…' : '⬇ Download Classifications'}
           </button>
         </div>
       </div>
-
-      {table.agent_steps && <AgentLog steps={table.agent_steps} />}
 
       <div className="table-scroll">
         <table className="data-table">

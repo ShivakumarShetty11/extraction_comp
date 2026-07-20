@@ -113,29 +113,11 @@ def list_metadata_groups(conn):
     return [dict(r) for r in rows]
 
 
-def _extract_table_code(title: str) -> str:
-    """Pull short table code like 'D-3', 'T-01', '1.1' from a table title."""
-    m = re.search(r"\b([A-Z]-\d+(?:\.\d+)?|\d+\.\d+)\b", title or "", re.IGNORECASE)
-    return m.group(1).upper() if m else ""
-
 
 def _make_dataset_id(table: dict, index: int) -> str:
-    """Short human-readable dataset_id: prefer extracted code, else counter."""
-    code = _extract_table_code(table.get("title", ""))
+    """Fallback dataset_id when table has no pre-built id."""
     suffix = uuid.uuid4().hex[:6]
-    if code:
-        return f"{code}-{suffix}"
     return f"DS-{index+1:03d}-{suffix}"
-
-
-def _make_unique_dataset_id(table: dict, meta_category: str, meta_time_period: str, index: int) -> str:
-    """DDI-style unique ID: DDI_IND_DES_{CATEGORY}_{TABLE}_{YEAR}_V1"""
-    cat_slug = re.sub(r"[^A-Z0-9]", "_", (meta_category or "DATA").upper())[:12]
-    code = _extract_table_code(table.get("title", ""))
-    table_slug = re.sub(r"[^A-Z0-9]", "", code.upper()) if code else f"T{index+1:02d}"
-    year_m = re.search(r"\b(20\d{2})\b", meta_time_period or "")
-    year = year_m.group(1) if year_m else date.today().strftime("%Y")
-    return f"DDI_IND_DES_{cat_slug}_{table_slug}_{year}_V1"
 
 
 def _extract_sl_no(row: dict, row_index: int) -> str:
@@ -165,12 +147,13 @@ def push_to_catalogue(
     meta_frequency,
     meta_time_period,
     meta_data_source,
+    meta_last_updated,
     meta_future_release,
     meta_key_statistics,
     meta_remarks,
     meta_excel_filename,
 ):
-    today = date.today().strftime("%B, %Y")   # e.g. "July, 2025"
+    today = meta_last_updated or date.today().strftime("%B, %Y")
     dataset_ids = []
     table_id_codes = []
 
@@ -179,9 +162,11 @@ def push_to_catalogue(
         for i, table in enumerate(tables):
             enriched = enriched_data[i] if i < len(enriched_data) else {}
 
-            ds_id = _make_dataset_id(table, i)
-            unique_ds_id = _make_unique_dataset_id(table, meta_category, meta_time_period, i)
-            table_code = _extract_table_code(table.get("title", "")) or f"T-{i+1:02d}"
+            # table["id"] was built during extraction as DDI_DEL_DES_VS_... format.
+            # Use it as dataset_id, table_id, and unique_dataset_id — all three stay in sync.
+            ds_id = table.get("id") or _make_dataset_id(table, i)
+            table_code = ds_id          # table_id === dataset_id
+            unique_ds_id = ds_id        # unique_dataset_id === dataset_id
             dataset_ids.append(ds_id)
             table_id_codes.append(table_code)
 
@@ -209,7 +194,7 @@ def push_to_catalogue(
                 unique_ds_id,
                 table_code,
                 metadata_id if metadata_mode == "existing" else None,
-                table.get("title", ""),
+                table.get("description") or table.get("title", ""),
                 enriched.get("short_description") or table.get("description", ""),
                 enriched.get("long_description") or table.get("description", ""),
                 meta_category,
@@ -263,7 +248,7 @@ def push_to_catalogue(
                     {
                         "dataset_id": dataset_ids[j],
                         "table_id": table_id_codes[j],
-                        "title": tables[j].get("title", ""),
+                        "title": tables[j].get("description") or tables[j].get("title", ""),
                         "short_description": (enriched_data[j].get("short_description") if j < len(enriched_data) else "") or "",
                         "long_description": (enriched_data[j].get("long_description") if j < len(enriched_data) else "") or "",
                     }

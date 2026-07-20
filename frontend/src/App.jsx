@@ -4,31 +4,12 @@ import TableSidebar from './components/TableSidebar'
 import TableViewer from './components/TableViewer'
 import PushModal from './components/PushModal'
 
-const MODE_CONFIG = {
-  direct_llm: {
-    label: 'Direct LLM',
-    endpoint: '/api/extract',
-    badge: 'LLM',
-    badgeClass: 'badge-llm',
-    description: 'Single prompt → single response. One LLM API call per table.',
-  },
-  agent: {
-    label: 'AI Agent',
-    endpoint: '/api/extract-agent',
-    badge: 'AGENT',
-    badgeClass: 'badge-agent',
-    description: 'ReAct loop with tools: scan rows → detect merges → build columns. Multiple steps per table.',
-  },
-}
-
 export default function App() {
-  const [mode, setMode] = useState('direct_llm')
   const [tables, setTables] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [filename, setFilename] = useState('')
-  const [resultMode, setResultMode] = useState(null)
   const [groups, setGroups] = useState(null)
   const [grouping, setGrouping] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
@@ -36,7 +17,6 @@ export default function App() {
   const resetResults = () => {
     setTables([])
     setSelectedId(null)
-    setResultMode(null)
     setGroups(null)
   }
 
@@ -49,7 +29,7 @@ export default function App() {
     formData.append('file', file)
 
     try {
-      const res = await fetch(MODE_CONFIG[mode].endpoint, { method: 'POST', body: formData })
+      const res = await fetch('/api/extract', { method: 'POST', body: formData })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
         throw new Error(err.detail || 'Extraction failed')
@@ -57,7 +37,6 @@ export default function App() {
       const data = await res.json()
       setTables(data.tables)
       setFilename(data.filename)
-      setResultMode(data.mode)
       if (data.tables.length > 0) setSelectedId(data.tables[0].id)
     } catch (e) {
       setError(e.message)
@@ -86,51 +65,57 @@ export default function App() {
   }
 
   const selectedTable = tables.find((t) => t.id === selectedId)
-  const cfg = MODE_CONFIG[mode]
 
   return (
     <div className="app">
-      <header className="app-header">
-        <div className="header-brand">
-          <span className="header-icon">⊞</span>
-          <span className="header-title">Table Extractor</span>
+      {/* ── Left navigation tab ── */}
+      <nav className="left-nav">
+        <div className="left-nav-brand">
+          <span className="left-nav-icon">⊞</span>
+          <div className="left-nav-title-block">
+            <span className="left-nav-title">DHARA</span>
+            <span className="left-nav-subtitle">TOOLKIT</span>
+          </div>
         </div>
 
-        <div className="mode-toggle">
-          {Object.entries(MODE_CONFIG).map(([key, c]) => (
-            <button
-              key={key}
-              className={`mode-btn ${mode === key ? 'mode-btn-active' : ''}`}
-              onClick={() => { setMode(key); resetResults(); setError(null) }}
-              disabled={loading}
-              title={c.description}
-            >
-              <span className={`mode-dot ${key === 'agent' ? 'dot-agent' : 'dot-llm'}`} />
-              {c.label}
-            </button>
-          ))}
+        <div className="left-nav-divider" />
+
+        <div className="left-nav-section">
+          <div className="left-nav-section-label">Dataset</div>
+          <FileUpload onUpload={handleUpload} loading={loading} />
         </div>
 
-        <FileUpload onUpload={handleUpload} loading={loading} />
-      </header>
+        {filename && !loading && (
+          <div className="left-nav-file" title={filename}>
+            <span className="left-nav-file-icon">📄</span>
+            <span className="left-nav-file-name">{filename}</span>
+          </div>
+        )}
 
-      <div className={`mode-bar ${mode === 'agent' ? 'mode-bar-agent' : 'mode-bar-llm'}`}>
-        <span className={`mode-bar-badge ${cfg.badgeClass}`}>{cfg.badge}</span>
-        <span className="mode-bar-desc">{cfg.description}</span>
-      </div>
+        {tables.length > 0 && !loading && (
+          <div className="left-nav-stats">
+            {tables.length} table{tables.length !== 1 ? 's' : ''} extracted
+          </div>
+        )}
+      </nav>
 
-      <div className="app-body">
+      {/* ── Main content ── */}
+      <div className="app-main">
+        <div className="app-topbar">
+          <a
+            href="https://des-website-235956738573.asia-south1.run.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="view-catalogue-btn"
+          >
+            View Catalogue ↗
+          </a>
+        </div>
         {loading && (
           <div className="loading-overlay">
             <div className="spinner" />
-            <p className="loading-text">
-              {mode === 'agent' ? 'AI Agent is running tool calls…' : 'Querying LLM…'}
-            </p>
-            <p className="loading-hint">
-              {mode === 'agent'
-                ? 'Agent uses scan → merge-detect → build-columns per table. May take 30–90 s.'
-                : 'One LLM call per table. Usually 10–30 s.'}
-            </p>
+            <p className="loading-text">Querying LLM…</p>
+            <p className="loading-hint">One LLM call per table. Usually 10–30 s.</p>
           </div>
         )}
 
@@ -142,25 +127,7 @@ export default function App() {
           <div className="empty-state">
             <div className="empty-icon">📁</div>
             <h2>Upload an Excel file to extract tables</h2>
-            <p>Choose a mode above, then upload a <code>.xlsx</code> file.</p>
-            <div className="comparison-cards">
-              <div className="comp-card comp-card-llm">
-                <div className="comp-card-title">⚡ Direct LLM</div>
-                <ul>
-                  <li>1 API call per table</li>
-                  <li>Prompt → JSON response</li>
-                  <li>Faster, no reasoning trace</li>
-                </ul>
-              </div>
-              <div className="comp-card comp-card-agent">
-                <div className="comp-card-title">🤖 AI Agent</div>
-                <ul>
-                  <li>Multi-step tool loop per table</li>
-                  <li>scan → detect → build</li>
-                  <li>Shows full reasoning chain</li>
-                </ul>
-              </div>
-            </div>
+            <p>Use the <strong>Upload Dataset</strong> button on the left to get started.</p>
           </div>
         )}
 
@@ -171,7 +138,6 @@ export default function App() {
               selectedId={selectedId}
               onSelect={setSelectedId}
               filename={filename}
-              resultMode={resultMode}
               groups={groups}
               grouping={grouping}
               onGroup={handleGroup}
@@ -179,15 +145,16 @@ export default function App() {
             />
             <main className="table-main">
               {selectedTable ? (
-                <TableViewer table={selectedTable} resultMode={resultMode} />
+                <TableViewer table={selectedTable} />
               ) : (
                 <div className="no-selection">Select a table from the sidebar</div>
               )}
             </main>
           </div>
         )}
-        {pushOpen && <PushModal tables={tables} groups={groups} onClose={() => setPushOpen(false)} />}
       </div>
+
+      {pushOpen && <PushModal tables={tables} groups={groups} onClose={() => setPushOpen(false)} />}
     </div>
   )
 }
