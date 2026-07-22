@@ -199,7 +199,7 @@ export default function TableViewer({ table, onUpdateId }) {
               <span className="catalogue-id-chip" title="Dataset ID (editable)">
                 {table.id}
               </span>
-              <button className="id-edit-btn" onClick={startEdit} title="Edit dataset ID">✎</button>
+              <button className="id-edit-btn" onClick={startEdit} title="Edit dataset ID">Edit ID</button>
             </>
           )}
         </div>
