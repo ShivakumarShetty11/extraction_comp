@@ -176,7 +176,7 @@ export default function TableSidebar({
           disabled={grouping}
           title="Ask Claude to group similar tables by topic"
         >
-          {grouping ? 'Grouping…' : groups ? '↻ Regroup' : '⊹ Group Similar'}
+          {grouping ? 'Grouping…' : groups ? 'Regroup' : 'Group Similar'}
         </button>
         <button className="push-catalogue-btn" onClick={onPush} title="Push extracted tables to Data Catalogue">
           CREATE METADATA

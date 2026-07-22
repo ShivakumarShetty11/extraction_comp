@@ -24,37 +24,50 @@ def _row_text(row) -> str:
 
 def _build_ddi_id(tbl: dict) -> str:
     """
-    Build a DDI-format table ID from the table's raw_header_rows.
+    Build a DDI-format table ID.
 
-    Row 0  e.g. "Table : D-3"                              → code = "D3"
-    Row 1  e.g. "Time Gap Registration in Death (Urban)"   → top  = "URBAN"
-    Row 2  e.g. "Religion-All"   (optional)                → nxt  = "ALL"
+    _strip_title_desc puts the raw title rows into tbl["title"] / tbl["description"];
+    raw_header_rows holds the COLUMN header rows (not the table label rows).
 
-    Result: DDI_DEL_DES_VS_D3_URBAN_2024_V1
+    Mapping:
+      tbl["title"]         e.g. "Table : D-3"                                  → code "D3"
+      tbl["description"]   e.g. "Live Birth by Age … (Rural)"                  → top  "RURAL"
+      raw_header_rows[0]   e.g. ["Religion-All", None, …]  (optional sub-row)  → nxt  "ALL"
+
+    Result: DDI_DEL_DES_VS_B14_RURAL_ALL_2024_V1
     """
-    headers = tbl.get("raw_header_rows", [])
+    title       = tbl.get("title", "")
+    description = tbl.get("description", "")
+    raw_headers = tbl.get("raw_header_rows", [])
 
-    # Table code: "D-3" → "D3", "B-14" → "B14"
+    # 1. Table code from title row: "Table : D-3" → "D3", "Table : B-14" → "B14"
     code = ""
-    if headers:
-        m = re.search(r"\b([A-Za-z]-\d+(?:\.\d+)?)\b", _row_text(headers[0]))
-        if m:
-            code = re.sub(r"[^A-Z0-9]", "", m.group(1).upper())
+    m = re.search(r"\b([A-Za-z]-\d+(?:\.\d+)?)\b", title)
+    if m:
+        code = re.sub(r"[^A-Z0-9]", "", m.group(1).upper())
 
-    # Top-level: parenthetical in row 1 → "(Urban)" → "URBAN"
+    # 2. Top-level from parenthetical in description: "(Urban)" → "URBAN"
+    #    Fall back to checking the title itself if description has none.
     top = ""
-    if len(headers) > 1:
-        m = re.search(r"\(([^)]+)\)", _row_text(headers[1]))
+    for src in [description, title]:
+        m = re.search(r"\(([^)]+)\)", src)
         if m:
-            top = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
+            candidate = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
+            if candidate and not candidate.isdigit():
+                top = candidate
+                break
 
-    # Next-level: text after last dash in row 2 → "Religion-All" → "ALL"
+    # 3. Next-level from first raw_header_rows entry: "Religion-All" → "ALL"
+    #    Looks for "Word-Value" pattern at end of the row text.
     nxt = ""
-    if len(headers) > 2:
-        text = _row_text(headers[2])
-        m = re.search(r"-\s*(.+)$", text)
+    for row in raw_headers:
+        text = _row_text(row)
+        m = re.search(r"[A-Za-z][A-Za-z\s]*-\s*([A-Za-z][A-Za-z\s]*)$", text.strip())
         if m:
-            nxt = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
+            candidate = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
+            if candidate:
+                nxt = candidate
+                break
 
     parts = [DDI_PREFIX]
     if code:
