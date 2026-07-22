@@ -46,13 +46,14 @@ def _build_ddi_id(tbl: dict) -> str:
     if m:
         code = re.sub(r"[^A-Z0-9]", "", m.group(1).upper())
 
-    # 2. Top-level from parenthetical in description: "(Urban)" → "URBAN"
-    #    Fall back to checking the title itself if description has none.
+    # 2. Top-level from the LAST parenthetical in description: "(Urban)" → "URBAN"
+    #    The geographic/scope qualifier is always the last parenthetical.
+    #    Fall back to title if description has none.
     top = ""
     for src in [description, title]:
-        m = re.search(r"\(([^)]+)\)", src)
-        if m:
-            candidate = re.sub(r"[^A-Z0-9]", "", m.group(1).strip().upper())
+        matches = re.findall(r"\(([^)]+)\)", src)
+        if matches:
+            candidate = re.sub(r"[^A-Z0-9]", "", matches[-1].strip().upper())
             if candidate and not candidate.isdigit():
                 top = candidate
                 break
