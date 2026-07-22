@@ -93,6 +93,11 @@ export default function App() {
 
   const selectedTable = tables.find((t) => t.id === selectedId)
 
+  const handleUpdateId = (newId) => {
+    setTables((prev) => prev.map((t) => t.id === selectedId ? { ...t, id: newId } : t))
+    setSelectedId(newId)
+  }
+
   return (
     <div className="app">
       {/* ── Left navigation tab ── */}
@@ -174,7 +179,7 @@ export default function App() {
             <div className="resize-handle" onMouseDown={onResizeStart} title="Drag to resize" />
             <main className="table-main">
               {selectedTable ? (
-                <TableViewer table={selectedTable} />
+                <TableViewer table={selectedTable} onUpdateId={handleUpdateId} />
               ) : (
                 <div className="no-selection">Select a table from the sidebar</div>
               )}

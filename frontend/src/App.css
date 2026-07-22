@@ -194,6 +194,58 @@ body {
   border: 1px solid #f5d9a8;
 }
 
+.id-edit-btn {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  line-height: 1.4;
+}
+.id-edit-btn:hover { background: var(--bg-2); color: var(--ink); }
+
+.id-edit-input {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: monospace;
+  letter-spacing: .4px;
+  padding: 3px 10px;
+  border: 1.5px solid var(--primary);
+  border-radius: 6px;
+  color: var(--ink);
+  background: #fff;
+  min-width: 320px;
+  outline: none;
+}
+
+.id-edit-save {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 3px 9px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: background .12s;
+}
+.id-edit-save:hover { background: var(--primary-dark); }
+
+.id-edit-cancel {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.id-edit-cancel:hover { background: var(--bg-2); color: var(--ink); }
+
 /* ── Upload button (lives in left-nav) ──────────────────────────────────── */
 .upload-btn {
   display: flex;

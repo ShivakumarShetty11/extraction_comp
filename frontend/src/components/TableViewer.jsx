@@ -158,17 +158,50 @@ async function downloadMetadataExcel(table, setLoading) {
   }
 }
 
-export default function TableViewer({ table }) {
+export default function TableViewer({ table, onUpdateId }) {
   const [metaLoading, setMetaLoading] = useState(false)
+  const [editingId, setEditingId] = useState(false)
+  const [draftId, setDraftId] = useState('')
+
+  const startEdit = () => { setDraftId(table.id); setEditingId(true) }
+  const cancelEdit = () => setEditingId(false)
+  const saveEdit = () => {
+    const trimmed = draftId.trim()
+    if (trimmed && trimmed !== table.id) onUpdateId?.(trimmed)
+    setEditingId(false)
+  }
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') saveEdit()
+    if (e.key === 'Escape') cancelEdit()
+  }
+
   const displayRows = table.rows.slice(0, MAX_DISPLAY)
   const truncated = table.rows.length > MAX_DISPLAY
   return (
     <div className="table-viewer">
       <div className="viewer-header">
         <div className="viewer-title-row">
-          <span className="catalogue-id-chip" title="Catalogue ID (dataset_id = table_id)">
-            {table.id}
-          </span>
+          {editingId ? (
+            <>
+              <input
+                className="id-edit-input"
+                value={draftId}
+                onChange={(e) => setDraftId(e.target.value)}
+                onKeyDown={handleKeyDown}
+                autoFocus
+                spellCheck={false}
+              />
+              <button className="id-edit-save" onClick={saveEdit} title="Save">✓</button>
+              <button className="id-edit-cancel" onClick={cancelEdit} title="Cancel">✕</button>
+            </>
+          ) : (
+            <>
+              <span className="catalogue-id-chip" title="Dataset ID (editable)">
+                {table.id}
+              </span>
+              <button className="id-edit-btn" onClick={startEdit} title="Edit dataset ID">✎</button>
+            </>
+          )}
         </div>
         {table.description && <div className="viewer-desc">{table.description}</div>}
         <div className="viewer-meta">
