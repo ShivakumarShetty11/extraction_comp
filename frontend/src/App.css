@@ -31,7 +31,7 @@ body {
 
 /* ── Left navigation tab ─────────────────────────────────────────────────── */
 .left-nav {
-  width: 220px;
+  width: 170px;
   flex-shrink: 0;
   background: #0b1e2d;
   color: #fff;
@@ -285,15 +285,32 @@ body {
 /* ── Content layout ─────────────────────────────────────────────────────── */
 .content-layout { flex: 1; display: flex; overflow: hidden; }
 
+/* ── Resize handle ──────────────────────────────────────────────────────── */
+.resize-handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background .15s;
+  position: relative;
+  z-index: 2;
+}
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--primary);
+  opacity: .35;
+}
+
 /* ── Sidebar ────────────────────────────────────────────────────────────── */
 .sidebar {
   width: 270px;
-  min-width: 270px;
+  min-width: 160px;
   background: var(--surface);
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .sidebar-header {

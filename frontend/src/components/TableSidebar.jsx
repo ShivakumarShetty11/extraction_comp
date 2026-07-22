@@ -159,13 +159,13 @@ function TableItem({ tbl, selectedId, onSelect }) {
 
 export default function TableSidebar({
   tables, selectedId, onSelect, filename,
-  groups, grouping, onGroup, onPush,
+  groups, grouping, onGroup, onPush, width,
 }) {
   const [groupMeta, setGroupMeta] = useState({})
   const tableMap = Object.fromEntries(tables.map((t) => [t.id, t]))
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={width ? { width, minWidth: width } : undefined}>
       <div className="sidebar-header">
         <div className="sidebar-meta-row">
           <span className="sidebar-count">{tables.length} table{tables.length !== 1 ? 's' : ''}</span>

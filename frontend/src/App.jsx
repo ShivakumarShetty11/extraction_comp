@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import FileUpload from './components/FileUpload'
 import TableSidebar from './components/TableSidebar'
 import TableViewer from './components/TableViewer'
@@ -13,6 +13,33 @@ export default function App() {
   const [groups, setGroups] = useState(null)
   const [grouping, setGrouping] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(270)
+  const dragging = useRef(false)
+  const dragStartX = useRef(0)
+  const dragStartW = useRef(0)
+
+  const onResizeStart = useCallback((e) => {
+    dragging.current = true
+    dragStartX.current = e.clientX
+    dragStartW.current = sidebarWidth
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (ev) => {
+      if (!dragging.current) return
+      const delta = ev.clientX - dragStartX.current
+      setSidebarWidth(Math.min(520, Math.max(160, dragStartW.current + delta)))
+    }
+    const onUp = () => {
+      dragging.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [sidebarWidth])
 
   const resetResults = () => {
     setTables([])
@@ -142,7 +169,9 @@ export default function App() {
               grouping={grouping}
               onGroup={handleGroup}
               onPush={() => setPushOpen(true)}
+              width={sidebarWidth}
             />
+            <div className="resize-handle" onMouseDown={onResizeStart} title="Drag to resize" />
             <main className="table-main">
               {selectedTable ? (
                 <TableViewer table={selectedTable} />
